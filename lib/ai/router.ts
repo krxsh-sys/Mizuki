@@ -89,15 +89,15 @@ function buildModelInstance(provider: ProviderName, rawModelId: string): Languag
 
   if (provider === "gemini" && keys.gemini) {
     const google = createGoogleGenerativeAI({ apiKey: keys.gemini });
-    return google(rawModelId);
+    return google(rawModelId) as unknown as LanguageModel;
   }
   if (provider === "groq" && keys.groq) {
     const groq = createGroq({ apiKey: keys.groq });
-    return groq(rawModelId);
+    return groq(rawModelId) as unknown as LanguageModel;
   }
   if (provider === "openrouter" && keys.openrouter) {
     const openrouter = createOpenRouter({ apiKey: keys.openrouter });
-    return openrouter(rawModelId);
+    return openrouter(rawModelId) as unknown as LanguageModel;
   }
   return null;
 }

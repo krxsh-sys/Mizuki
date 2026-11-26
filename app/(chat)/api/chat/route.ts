@@ -66,11 +66,67 @@ function extractTextFromParts(parts: unknown): string {
   return parts
     .filter(
       (p): p is { type: string; text?: string } =>
-        typeof p === "object" && p !== null && (p as { type?: string }).type === "text"
+        typeof p === "object" &&
+        p !== null &&
+        (p as { type?: string }).type === "text"
     )
     .map((p) => p.text ?? "")
     .join("\n")
     .trim();
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: preserve exact stream type across peek/replay
+async function peekAndReplayStream<S extends ReadableStream<any>>(
+  stream: S
+): Promise<{ replayStream: S | null; error: unknown }> {
+  type Chunk = S extends ReadableStream<infer U> ? U : never;
+  const reader = stream.getReader() as ReadableStreamDefaultReader<Chunk>;
+  const buffered: Chunk[] = [];
+
+  while (true) {
+    const res = await reader.read();
+    if (res.done) break;
+    const chunk = res.value as unknown as { type?: string; error?: unknown };
+    if (chunk?.type === "error") {
+      await reader.cancel().catch(() => {});
+      return {
+        replayStream: null,
+        error: chunk.error ?? new Error("Provider stream error"),
+      };
+    }
+    buffered.push(res.value);
+    if (chunk?.type && isModelStreamActivity({ type: chunk.type })) {
+      break;
+    }
+  }
+
+  if (buffered.length === 0) {
+    await reader.cancel().catch(() => {});
+    return { replayStream: null, error: new Error("Empty provider stream") };
+  }
+
+  const replayStream = new ReadableStream<Chunk>({
+    async start(controller) {
+      for (const item of buffered) {
+        controller.enqueue(item);
+      }
+      try {
+        while (true) {
+          const res = await reader.read();
+          if (res.done) break;
+          controller.enqueue(res.value);
+        }
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+    cancel() {
+      reader.cancel().catch(() => {});
+    },
+  });
+
+  return { replayStream: replayStream as unknown as S, error: null };
 }
 
 function getStreamContext() {
@@ -94,8 +150,15 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { id, message, messages, selectedChatModel, selectedVisibilityType, temperature, customInstructions } =
-      requestBody;
+    const {
+      id,
+      message,
+      messages,
+      selectedChatModel,
+      selectedVisibilityType,
+      temperature,
+      customInstructions,
+    } = requestBody;
 
     const [botIdResult, session] = await Promise.all([
       checkBotId().catch(() => null),
@@ -110,7 +173,6 @@ export async function POST(request: Request) {
       return new ChatbotError("unauthorized:chat").toResponse();
     }
 
-    // Allow any of the 300+ dynamic models instead of restricting to hardcoded IDs
     const chatModel = selectedChatModel?.trim() || DEFAULT_CHAT_MODEL;
 
     await checkIpRateLimit(ipAddress(request));
@@ -289,7 +351,6 @@ export async function POST(request: Request) {
           clearHealthCheckTimer();
         };
 
-        // Intelligent sticky circuit-breaker fallback loop
         const chain = resolveFallbackChain(chatModel);
         let merged = false;
         let lastError: unknown = null;
@@ -360,32 +421,14 @@ export async function POST(request: Request) {
               },
             });
 
-            // Peek stream until first real activity or immediate provider error
-            const reader = result.stream.getReader();
-            const buffered: NonNullable<Awaited<ReturnType<typeof reader.read>>["value"]>[] = [];
-            let failed = false;
+            const peeked = await peekAndReplayStream(result.stream);
 
-            while (true) {
-              const { value, done } = await reader.read();
-              if (done) break;
-              const chunk = value as { type?: string; error?: unknown };
-              if (chunk?.type === "error") {
-                lastError = chunk.error ?? new Error("Provider stream error");
-                failed = true;
-                break;
-              }
-              buffered.push(value);
-              if (chunk?.type && isModelStreamActivity({ type: chunk.type })) {
-                break;
-              }
-            }
-
-            if (failed || buffered.length === 0) {
-              await reader.cancel().catch(() => {});
+            if (!peeked.replayStream) {
+              lastError = peeked.error;
               recordRouteFailure(
                 candidate.provider,
                 candidate.rawModelId,
-                lastError
+                peeked.error
               );
               continue;
             }
@@ -394,31 +437,10 @@ export async function POST(request: Request) {
             servedProvider = candidate.provider;
             recordRouteSuccess(candidate.provider, candidate.rawModelId);
 
-            const replayStream = new ReadableStream({
-              async start(controller) {
-                for (const item of buffered) {
-                  controller.enqueue(item);
-                }
-                try {
-                  while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    controller.enqueue(value);
-                  }
-                  controller.close();
-                } catch (err) {
-                  controller.error(err);
-                }
-              },
-              cancel() {
-                reader.cancel().catch(() => {});
-              },
-            }) as typeof result.stream;
-
             dataStream.merge(
               toUIMessageStream({
                 sendReasoning: isReasoningModel,
-                stream: replayStream,
+                stream: peeked.replayStream,
               })
             );
             merged = true;
@@ -487,7 +509,6 @@ export async function POST(request: Request) {
           });
         }
 
-        // Capture clean (prompt -> completion) training data in Supabase
         const lastUserText = extractTextFromParts(message?.parts);
         const assistantText = finishedMessages
           .filter((m) => m.role === "assistant")

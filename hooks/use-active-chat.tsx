@@ -1,5 +1,6 @@
 "use client";
 
+import { getActiveProfile, loadMizukiConfig } from "@/lib/mizuki-config";
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
@@ -148,6 +149,14 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       api: `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/chat`,
       fetch: fetchWithErrorHandlers,
       prepareSendMessagesRequest(request) {
+          const mizukiConfig = loadMizukiConfig();
+          const activeProfile = getActiveProfile(mizukiConfig);
+          const customInstructions = [
+            mizukiConfig.globalInstructions.trim(),
+            activeProfile.instructions.trim(),
+          ]
+            .filter(Boolean)
+            .join("\n\n");
         const lastMessage = request.messages.at(-1);
         const isToolApprovalContinuation =
           lastMessage?.role !== "user" ||
@@ -168,6 +177,8 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
               : { message: lastMessage }),
             selectedChatModel: currentModelIdRef.current,
             selectedVisibilityType: visibility,
+            temperature: activeProfile.temperature,
+            ...(customInstructions ? { customInstructions } : {}),
             ...request.body,
           },
         };

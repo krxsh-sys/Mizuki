@@ -15,19 +15,23 @@ import { auth, type UserType } from "@/app/(auth)/auth";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import { generateTitleFromUserMessage } from "@/lib/ai/generate-title";
 import {
-  allowedModelIds,
   chatModels,
   DEFAULT_CHAT_MODEL,
   getCapabilities,
   getModelAvailability,
 } from "@/lib/ai/models";
 import { type RequestHints, systemPrompt } from "@/lib/ai/prompts";
-import { getLanguageModel } from "@/lib/ai/providers";
+import {
+  recordRouteFailure,
+  recordRouteSuccess,
+  resolveFallbackChain,
+} from "@/lib/ai/router";
 import { createDocument } from "@/lib/ai/tools/create-document";
 import { editDocument } from "@/lib/ai/tools/edit-document";
 import { getWeather } from "@/lib/ai/tools/get-weather";
 import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
 import { updateDocument } from "@/lib/ai/tools/update-document";
+import { logTrainingExample } from "@/lib/ai/training-logger";
 import { isProductionEnvironment } from "@/lib/constants";
 import {
   createStreamId,
@@ -57,6 +61,18 @@ function isModelStreamActivity(chunk: { type: string }) {
   );
 }
 
+function extractTextFromParts(parts: unknown): string {
+  if (!Array.isArray(parts)) return "";
+  return parts
+    .filter(
+      (p): p is { type: string; text?: string } =>
+        typeof p === "object" && p !== null && (p as { type?: string }).type === "text"
+    )
+    .map((p) => p.text ?? "")
+    .join("\n")
+    .trim();
+}
+
 function getStreamContext() {
   try {
     return createResumableStreamContext({ waitUntil: after });
@@ -78,7 +94,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { id, message, messages, selectedChatModel, selectedVisibilityType } =
+    const { id, message, messages, selectedChatModel, selectedVisibilityType, temperature, customInstructions } =
       requestBody;
 
     const [botIdResult, session] = await Promise.all([
@@ -94,9 +110,8 @@ export async function POST(request: Request) {
       return new ChatbotError("unauthorized:chat").toResponse();
     }
 
-    const chatModel = allowedModelIds.has(selectedChatModel)
-      ? selectedChatModel
-      : DEFAULT_CHAT_MODEL;
+    // Allow any of the 300+ dynamic models instead of restricting to hardcoded IDs
+    const chatModel = selectedChatModel?.trim() || DEFAULT_CHAT_MODEL;
 
     await checkIpRateLimit(ipAddress(request));
 
@@ -198,13 +213,21 @@ export async function POST(request: Request) {
     const modelCapabilities = await getCapabilities();
     const capabilities = modelCapabilities[chatModel];
     const isReasoningModel = capabilities?.reasoning === true;
-    const supportsTools = capabilities?.tools === true;
+    const supportsTools = capabilities?.tools !== false;
 
     const modelMessages = await convertToModelMessages(uiMessages);
+    const baseSystemPrompt = systemPrompt({ requestHints, supportsTools });
+    const activeSystemPrompt = customInstructions?.trim()
+      ? `${baseSystemPrompt}\n\n## User Custom Instructions\n${customInstructions.trim()}`
+      : baseSystemPrompt;
+
+    let servedModel = chatModel;
+    let servedProvider = "unknown";
 
     const stream = createUIMessageStream({
       execute: async ({ writer: dataStream }) => {
         const modelName = modelConfig?.name ?? chatModel;
+
         let hasModelActivity = false;
         let healthCheckTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -266,74 +289,150 @@ export async function POST(request: Request) {
           clearHealthCheckTimer();
         };
 
-        const result = streamText({
-          activeTools:
-            isReasoningModel && !supportsTools
-              ? []
-              : [
-                  "getWeather",
-                  "createDocument",
-                  "editDocument",
-                  "updateDocument",
-                  "requestSuggestions",
-                ],
-          instructions: systemPrompt({ requestHints, supportsTools }),
-          messages: modelMessages,
-          model: getLanguageModel(chatModel),
-          onAbort() {
-            stopWaitingStatus();
-          },
-          onChunk({ chunk }) {
-            if (isModelStreamActivity(chunk)) {
-              markModelActive();
-            }
-          },
-          onEnd() {
-            stopWaitingStatus();
-          },
-          onError() {
-            stopWaitingStatus();
-          },
-          providerOptions: {
-            ...(modelConfig?.gatewayOrder && {
-              gateway: { order: modelConfig.gatewayOrder },
-            }),
-            ...(modelConfig?.reasoningEffort && {
-              openai: { reasoningEffort: modelConfig.reasoningEffort },
-            }),
-          },
-          stopWhen: isStepCount(5),
-          telemetry: {
-            functionId: "stream-text",
-            isEnabled: isProductionEnvironment,
-          },
-          tools: {
-            createDocument: createDocument({
-              dataStream,
-              modelId: chatModel,
-              session,
-            }),
-            editDocument: editDocument({ dataStream, session }),
-            getWeather,
-            requestSuggestions: requestSuggestions({
-              dataStream,
-              modelId: chatModel,
-              session,
-            }),
-            updateDocument: updateDocument({
-              dataStream,
-              modelId: chatModel,
-              session,
-            }),
-          },
-        });
+        // Intelligent sticky circuit-breaker fallback loop
+        const chain = resolveFallbackChain(chatModel);
+        let merged = false;
+        let lastError: unknown = null;
 
-        dataStream.merge(
-          toUIMessageStream({
-            sendReasoning: isReasoningModel,
-            stream: result.stream,
-          })
-        );
+        for (let i = 0; i < chain.length; i++) {
+          const candidate = chain[i];
+
+          if (i > 0) {
+            writeWaitingStatus(
+              "still-waiting",
+              `Routing to ${candidate.rawModelId}...`
+            );
+          }
+
+          try {
+            const result = streamText({
+              activeTools:
+                isReasoningModel && !supportsTools
+                  ? []
+                  : [
+                      "getWeather",
+                      "createDocument",
+                      "editDocument",
+                      "updateDocument",
+                      "requestSuggestions",
+                    ],
+              instructions: activeSystemPrompt,
+              ...(typeof temperature === "number" ? { temperature } : {}),
+              messages: modelMessages,
+              model: candidate.model,
+              onAbort() {
+                stopWaitingStatus();
+              },
+              onChunk({ chunk }) {
+                if (isModelStreamActivity(chunk)) {
+                  markModelActive();
+                }
+              },
+              onEnd() {
+                stopWaitingStatus();
+              },
+              onError() {
+                stopWaitingStatus();
+              },
+              stopWhen: isStepCount(5),
+              telemetry: {
+                functionId: "stream-text",
+                isEnabled: isProductionEnvironment,
+              },
+              tools: {
+                createDocument: createDocument({
+                  dataStream,
+                  modelId: candidate.fullId,
+                  session,
+                }),
+                editDocument: editDocument({ dataStream, session }),
+                getWeather,
+                requestSuggestions: requestSuggestions({
+                  dataStream,
+                  modelId: candidate.fullId,
+                  session,
+                }),
+                updateDocument: updateDocument({
+                  dataStream,
+                  modelId: candidate.fullId,
+                  session,
+                }),
+              },
+            });
+
+            // Peek stream until first real activity or immediate provider error
+            const reader = result.stream.getReader();
+            const buffered: unknown[] = [];
+            let failed = false;
+
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              const chunk = value as { type?: string; error?: unknown };
+              if (chunk?.type === "error") {
+                lastError = chunk.error ?? new Error("Provider stream error");
+                failed = true;
+                break;
+              }
+              buffered.push(value);
+              if (chunk?.type && isModelStreamActivity({ type: chunk.type })) {
+                break;
+              }
+            }
+
+            if (failed || buffered.length === 0) {
+              await reader.cancel().catch(() => {});
+              recordRouteFailure(
+                candidate.provider,
+                candidate.rawModelId,
+                lastError
+              );
+              continue;
+            }
+
+            servedModel = candidate.fullId;
+            servedProvider = candidate.provider;
+            recordRouteSuccess(candidate.provider, candidate.rawModelId);
+
+            const replayStream = new ReadableStream({
+              async start(controller) {
+                for (const item of buffered) {
+                  controller.enqueue(item);
+                }
+                try {
+                  while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    controller.enqueue(value);
+                  }
+                  controller.close();
+                } catch (err) {
+                  controller.error(err);
+                }
+              },
+              cancel() {
+                reader.cancel().catch(() => {});
+              },
+            }) as typeof result.stream;
+
+            dataStream.merge(
+              toUIMessageStream({
+                sendReasoning: isReasoningModel,
+                stream: replayStream,
+              })
+            );
+            merged = true;
+            break;
+          } catch (err) {
+            lastError = err;
+            recordRouteFailure(candidate.provider, candidate.rawModelId, err);
+          }
+        }
+
+        if (!merged) {
+          stopWaitingStatus();
+          throw lastError ?? new Error("All configured AI providers failed.");
+        }
 
         if (titlePromise) {
           try {
@@ -387,17 +486,31 @@ export async function POST(request: Request) {
             })),
           });
         }
+
+        // Capture clean (prompt -> completion) training data in Supabase
+        const lastUserText = extractTextFromParts(message?.parts);
+        const assistantText = finishedMessages
+          .filter((m) => m.role === "assistant")
+          .map((m) => extractTextFromParts(m.parts))
+          .join("\n")
+          .trim();
+
+        if (lastUserText && assistantText) {
+          await logTrainingExample({
+            chatId: id,
+            userId: session.user.id,
+            requestedModel: chatModel,
+            servedModel,
+            provider: servedProvider,
+            systemPrompt: activeSystemPrompt,
+            prompt: lastUserText,
+            completion: assistantText,
+          });
+        }
       },
       onError: (error) => {
-        if (
-          error instanceof Error &&
-          error.message?.includes(
-            "AI Gateway requires a valid credit card on file to service requests"
-          )
-        ) {
-          return "AI Gateway requires a valid credit card on file to service requests. Please visit https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dadd-credit-card to add a card and unlock your free credits.";
-        }
-        return "Oops, an error occurred!";
+        console.error("[chat stream error]:", error);
+        return "Oops, an error occurred while generating a response!";
       },
       originalMessages: isToolApprovalFlow ? uiMessages : undefined,
     });
@@ -428,15 +541,6 @@ export async function POST(request: Request) {
 
     if (error instanceof ChatbotError) {
       return error.toResponse();
-    }
-
-    if (
-      error instanceof Error &&
-      error.message?.includes(
-        "AI Gateway requires a valid credit card on file to service requests"
-      )
-    ) {
-      return new ChatbotError("bad_request:activate_gateway").toResponse();
     }
 
     console.error("Unhandled error in chat API:", error, { vercelId });

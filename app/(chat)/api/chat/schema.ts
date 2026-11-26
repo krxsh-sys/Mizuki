@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const textPartSchema = z.object({
-  text: z.string().min(1).max(2000),
+  text: z.string().min(1).max(32000),
   type: z.enum(["text"]),
 });
 
@@ -32,6 +32,8 @@ export const postRequestBodySchema = z.object({
   messages: z.array(toolApprovalMessageSchema).optional(),
   selectedChatModel: z.string(),
   selectedVisibilityType: z.enum(["public", "private"]),
+  temperature: z.number().min(0).max(2).optional(),
+  customInstructions: z.string().max(8000).optional(),
 });
 
 export type PostRequestBody = z.infer<typeof postRequestBodySchema>;

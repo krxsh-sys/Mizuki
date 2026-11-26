@@ -1,8 +1,7 @@
-import { google } from "@ai-sdk/google";
-import { groq } from "@ai-sdk/groq";
 import { customProvider } from "ai";
 import { isTestEnvironment } from "../constants";
 import { titleModel } from "./models";
+import { resolveFallbackChain } from "./router";
 
 export const myProvider = isTestEnvironment
   ? (() => {
@@ -24,15 +23,11 @@ export function getLanguageModel(modelId: string) {
     return myProvider.languageModel(modelId);
   }
 
-  if (modelId.startsWith("groq/")) {
-    return groq(modelId.slice("groq/".length));
+  const chain = resolveFallbackChain(modelId);
+  if (chain.length === 0) {
+    throw new Error("No API keys configured (GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY).");
   }
-
-  if (modelId.startsWith("google/")) {
-    return google(modelId.slice("google/".length));
-  }
-
-  return groq("openai/gpt-oss-20b");
+  return chain[0].model;
 }
 
 export function getTitleModel() {

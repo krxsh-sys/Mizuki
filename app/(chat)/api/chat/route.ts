@@ -362,7 +362,7 @@ export async function POST(request: Request) {
 
             // Peek stream until first real activity or immediate provider error
             const reader = result.stream.getReader();
-            const buffered: unknown[] = [];
+            const buffered: NonNullable<Awaited<ReturnType<typeof reader.read>>["value"]>[] = [];
             let failed = false;
 
             while (true) {

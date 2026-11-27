@@ -181,8 +181,11 @@ export const ModelSelectorLogo = ({
   <img
     {...props}
     alt={`${provider} logo`}
-    className={cn("size-4 dark:invert", className)}
+    className={cn("size-4 shrink-0 dark:invert", className)}
     height={16}
+    onError={(e) => {
+      e.currentTarget.style.display = "none";
+    }}
     src={`https://models.dev/logos/${provider}.svg`}
     width={16}
   />

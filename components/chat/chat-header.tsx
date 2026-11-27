@@ -1,12 +1,11 @@
 "use client";
 
+import { PanelLeftIcon, PenSquareIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { memo, useCallback } from "react";
 import { MizukiSettingsDrawer } from "@/components/mizuki-settings-drawer";
-import { PanelLeftIcon } from "lucide-react";
-import Link from "next/link";
-import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
-import { VercelIcon } from "./icons";
 import { VisibilitySelector, type VisibilityType } from "./visibility-selector";
 
 function PureChatHeader({
@@ -18,38 +17,51 @@ function PureChatHeader({
   selectedVisibilityType: VisibilityType;
   isReadonly: boolean;
 }) {
+  const router = useRouter();
   const { state, toggleSidebar, isMobile } = useSidebar();
+  const showCollapsedControls = state === "collapsed" || isMobile;
 
-  if (state === "collapsed" && !isMobile) {
-    return null;
-  }
+  const handleNewChat = useCallback(() => {
+    router.push("/");
+  }, [router]);
 
   return (
-    <header className="sticky top-0 flex h-14 items-center gap-2 bg-sidebar px-3">
-      <Button
-        className="md:hidden"
-        onClick={toggleSidebar}
-        size="icon-sm"
-        variant="ghost"
-      >
-        <PanelLeftIcon className="size-4" />
-      </Button>
+    <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 bg-background/85 px-3 backdrop-blur-md">
+      {showCollapsedControls && (
+        <div className="flex items-center gap-1">
+          <Button
+            aria-label="Toggle sidebar"
+            className="size-8 rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground"
+            onClick={toggleSidebar}
+            size="icon-sm"
+            variant="ghost"
+          >
+            <PanelLeftIcon className="size-4" />
+          </Button>
 
-      <Link
-        className="flex size-8 items-center justify-center rounded-lg md:hidden"
-        href="https://vercel.com/templates/next.js/chatbot"
-        rel="noopener noreferrer"
-        target="_blank"
-      >
-        <VercelIcon size={14} />
-      </Link>
-
-      {!isReadonly && (
-        <VisibilitySelector
-          chatId={chatId}
-          selectedVisibilityType={selectedVisibilityType}
-        />
+          <Button
+            aria-label="New chat"
+            className="size-8 rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground"
+            onClick={handleNewChat}
+            size="icon-sm"
+            variant="ghost"
+          >
+            <PenSquareIcon className="size-4" />
+          </Button>
+        </div>
       )}
+
+      <div className="flex items-center gap-2">
+        <span className="select-none text-[15px] font-semibold tracking-tight text-foreground">
+          Mizuki
+        </span>
+        {!isReadonly && (
+          <VisibilitySelector
+            chatId={chatId}
+            selectedVisibilityType={selectedVisibilityType}
+          />
+        )}
+      </div>
 
       <div className="ml-auto flex items-center gap-2">
         <MizukiSettingsDrawer />

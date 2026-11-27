@@ -2,10 +2,14 @@
 
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { motion } from "framer-motion";
+import {
+  Code2Icon,
+  LightbulbIcon,
+  SparklesIcon,
+  TerminalIcon,
+} from "lucide-react";
 import { memo, useCallback } from "react";
-import { suggestions } from "@/lib/constants";
 import type { ChatMessage } from "@/lib/types";
-import { Suggestion } from "../ai-elements/suggestion";
 import type { VisibilityType } from "./visibility-selector";
 
 type SuggestedActionsProps = {
@@ -14,17 +18,39 @@ type SuggestedActionsProps = {
   selectedVisibilityType: VisibilityType;
 };
 
+const QUICK_CHIPS = [
+  {
+    icon: TerminalIcon,
+    label: "Write code",
+    prompt: "Help me write clean, production-ready code for ",
+  },
+  {
+    icon: Code2Icon,
+    label: "Debug issue",
+    prompt: "Help me debug an error step by step. Here is what is happening: ",
+  },
+  {
+    icon: LightbulbIcon,
+    label: "Brainstorm",
+    prompt: "Brainstorm 5 sharp, original ideas for ",
+  },
+  {
+    icon: SparklesIcon,
+    label: "Explain fast",
+    prompt: "Explain this clearly with zero fluff and a concrete example: ",
+  },
+];
+
 function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
-  const suggestedActions = suggestions;
-  const handleSuggestionClick = useCallback(
-    (suggestion: string) => {
+  const handleChipClick = useCallback(
+    (prompt: string) => {
       window.history.pushState(
         {},
         "",
         `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/chat/${chatId}`
       );
       sendMessage({
-        parts: [{ text: suggestion, type: "text" }],
+        parts: [{ text: prompt.trim(), type: "text" }],
         role: "user",
       });
     },
@@ -33,50 +59,38 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
 
   return (
     <div
-      className="flex w-full gap-2.5 overflow-x-auto pb-1 sm:grid sm:grid-cols-2 sm:overflow-visible"
+      className="no-scrollbar flex w-full items-center justify-start gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:justify-center"
       data-testid="suggested-actions"
-      style={{
-        msOverflowStyle: "none",
-        scrollbarWidth: "none",
-        WebkitOverflowScrolling: "touch",
-      }}
     >
-      {suggestedActions.map((suggestedAction, index) => (
-        <motion.div
-          animate={{ opacity: 1, y: 0 }}
-          className="min-w-[200px] shrink-0 sm:min-w-0 sm:shrink"
-          exit={{ opacity: 0, y: 16 }}
-          initial={{ opacity: 0, y: 16 }}
-          key={suggestedAction}
-          transition={{
-            delay: 0.06 * index,
-            duration: 0.4,
-            ease: [0.22, 1, 0.36, 1],
-          }}
-        >
-          <Suggestion
-            className="h-auto w-full whitespace-nowrap rounded-xl border border-border/50 bg-card/30 px-4 py-3 text-left text-[12px] leading-relaxed text-muted-foreground transition-all duration-200 sm:whitespace-normal sm:p-4 sm:text-[13px] hover:-translate-y-0.5 hover:bg-card/60 hover:text-foreground hover:shadow-[var(--shadow-card)]"
-            onClick={handleSuggestionClick}
-            suggestion={suggestedAction}
+      {QUICK_CHIPS.map((chip, index) => {
+        const Icon = chip.icon;
+        return (
+          <motion.button
+            animate={{ opacity: 1, y: 0 }}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border/60 bg-secondary/45 px-3.5 py-2 text-xs font-medium text-muted-foreground transition hover:border-border hover:bg-secondary hover:text-foreground active:scale-95"
+            exit={{ opacity: 0, y: 8 }}
+            initial={{ opacity: 0, y: 10 }}
+            key={chip.label}
+            onClick={() => handleChipClick(chip.prompt)}
+            transition={{
+              delay: 0.04 * index,
+              duration: 0.32,
+              ease: [0.22, 1, 0.36, 1],
+            }}
+            type="button"
           >
-            {suggestedAction}
-          </Suggestion>
-        </motion.div>
-      ))}
+            <Icon className="size-3.5 opacity-80" />
+            <span>{chip.label}</span>
+          </motion.button>
+        );
+      })}
     </div>
   );
 }
 
 export const SuggestedActions = memo(
   PureSuggestedActions,
-  (prevProps, nextProps) => {
-    if (prevProps.chatId !== nextProps.chatId) {
-      return false;
-    }
-    if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
-      return false;
-    }
-
-    return true;
-  }
+  (prevProps, nextProps) =>
+    prevProps.chatId === nextProps.chatId &&
+    prevProps.selectedVisibilityType === nextProps.selectedVisibilityType
 );

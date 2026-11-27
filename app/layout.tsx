@@ -7,13 +7,14 @@ import "./globals.css";
 import { SessionProvider } from "next-auth/react";
 
 export const metadata: Metadata = {
-  description: "Next.js chatbot template using the AI SDK.",
-  metadataBase: new URL("https://chat.vercel.ai"),
-  title: "Next.js Chatbot Template",
+  description:
+    "Mizuki — High-speed multi-provider AI workspace with adaptive routing, custom profiles, and real-time controls.",
+  title: "Mizuki",
 };
 
 export const viewport = {
   maximumScale: 1,
+  viewportFit: "cover" as const,
 };
 
 const geist = Geist({
@@ -28,11 +29,21 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
 });
 
-const LIGHT_THEME_COLOR = "hsl(0 0% 100%)";
-const DARK_THEME_COLOR = "hsl(240deg 10% 3.92%)";
-const THEME_COLOR_SCRIPT = `\
-(function() {
+const LIGHT_THEME_COLOR = "#ffffff";
+const DARK_THEME_COLOR = "#212121";
+const OLED_THEME_COLOR = "#000000";
+
+const THEME_COLOR_SCRIPT = `(function() {
   var html = document.documentElement;
+  try {
+    var raw = localStorage.getItem('mizuki_workspace_config_v1');
+    if (raw) {
+      var cfg = JSON.parse(raw);
+      if (cfg.oledMode) html.classList.add('mizuki-oled');
+      if (cfg.fontSize === 'sm') html.classList.add('mizuki-text-sm');
+      if (cfg.fontSize === 'lg') html.classList.add('mizuki-text-lg');
+    }
+  } catch (e) {}
   var meta = document.querySelector('meta[name="theme-color"]');
   if (!meta) {
     meta = document.createElement('meta');
@@ -41,7 +52,8 @@ const THEME_COLOR_SCRIPT = `\
   }
   function updateThemeColor() {
     var isDark = html.classList.contains('dark');
-    meta.setAttribute('content', isDark ? '${DARK_THEME_COLOR}' : '${LIGHT_THEME_COLOR}');
+    var isOled = html.classList.contains('mizuki-oled');
+    meta.setAttribute('content', isDark ? (isOled ? '${OLED_THEME_COLOR}' : '${DARK_THEME_COLOR}') : '${LIGHT_THEME_COLOR}');
   }
   var observer = new MutationObserver(updateThemeColor);
   observer.observe(html, { attributes: true, attributeFilter: ['class'] });
@@ -61,7 +73,7 @@ export default function RootLayout({
     >
       <head>
         <script
-          // biome-ignore lint/security/noDangerouslySetInnerHtml: "Required"
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: "Required for FOUC-free theme color"
           dangerouslySetInnerHTML={{
             __html: THEME_COLOR_SCRIPT,
           }}
@@ -70,7 +82,7 @@ export default function RootLayout({
       <body className="antialiased">
         <ThemeProvider
           attribute="class"
-          defaultTheme="system"
+          defaultTheme="dark"
           disableTransitionOnChange
           enableSystem
         >

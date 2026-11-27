@@ -6,6 +6,7 @@ import {
   PaletteIcon,
   PenLineIcon,
   PenSquareIcon,
+  SettingsIcon,
   Trash2Icon,
   XIcon,
 } from "lucide-react";
@@ -38,6 +39,12 @@ export const slashCommands: SlashCommand[] = [
     description: "Rename current chat",
     icon: <PenLineIcon className="size-3.5" />,
     name: "rename",
+  },
+  {
+    action: "settings",
+    description: "Open Mizuki settings, profiles & temperature",
+    icon: <SettingsIcon className="size-3.5" />,
+    name: "settings",
   },
   {
     action: "model",

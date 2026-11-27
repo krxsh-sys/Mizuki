@@ -6,14 +6,19 @@ export type MizukiProfile = {
   builtIn?: boolean;
 };
 
+export type MizukiFontSize = "sm" | "md" | "lg";
+
 export type MizukiConfig = {
   activeProfileId: string;
   globalInstructions: string;
   profiles: MizukiProfile[];
+  oledMode?: boolean;
+  fontSize?: MizukiFontSize;
 };
 
 export const MIZUKI_STORAGE_KEY = "mizuki_workspace_config_v1";
 export const MIZUKI_CONFIG_EVENT = "mizuki-config-updated";
+export const MIZUKI_OPEN_SETTINGS_EVENT = "mizuki-open-settings";
 
 export const DEFAULT_PROFILES: MizukiProfile[] = [
   {
@@ -46,7 +51,27 @@ export const DEFAULT_MIZUKI_CONFIG: MizukiConfig = {
   activeProfileId: "default",
   globalInstructions: "",
   profiles: DEFAULT_PROFILES,
+  oledMode: false,
+  fontSize: "md",
 };
+
+export function openMizukiSettings(
+  tab?: "tuning" | "personalization" | "appearance" | "data"
+): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(MIZUKI_OPEN_SETTINGS_EVENT, { detail: { tab } })
+  );
+}
+
+export function applyMizukiAppearance(config: MizukiConfig): void {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  root.classList.toggle("mizuki-oled", Boolean(config.oledMode));
+  root.classList.remove("mizuki-text-sm", "mizuki-text-lg");
+  if (config.fontSize === "sm") root.classList.add("mizuki-text-sm");
+  if (config.fontSize === "lg") root.classList.add("mizuki-text-lg");
+}
 
 export function loadMizukiConfig(): MizukiConfig {
   if (typeof window === "undefined") return DEFAULT_MIZUKI_CONFIG;
@@ -70,6 +95,11 @@ export function loadMizukiConfig(): MizukiConfig {
           ? parsed.globalInstructions
           : "",
       profiles,
+      oledMode: Boolean(parsed.oledMode),
+      fontSize:
+        parsed.fontSize === "sm" || parsed.fontSize === "lg"
+          ? parsed.fontSize
+          : "md",
     };
   } catch {
     return DEFAULT_MIZUKI_CONFIG;
@@ -79,6 +109,7 @@ export function loadMizukiConfig(): MizukiConfig {
 export function saveMizukiConfig(config: MizukiConfig): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(MIZUKI_STORAGE_KEY, JSON.stringify(config));
+  applyMizukiAppearance(config);
   window.dispatchEvent(new Event(MIZUKI_CONFIG_EVENT));
 }
 
